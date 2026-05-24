@@ -1,40 +1,50 @@
-import VideoFeed from './VideoFeed';
+import { useState } from 'react';
 import CodeEditor from './CodeEditor';
+import VideoFeed from './VideoFeed'; // <-- Import the new component
+import { problemDatabase } from '../data/problems';
 
 export default function InterviewRoom() {
+  const [currentProblemId, setCurrentProblemId] = useState('two-sum'); 
+  const activeProblem = problemDatabase[currentProblemId];
+
   return (
     <div className="h-screen w-full flex bg-gray-900 text-white overflow-hidden">
       
-      {/* Left Panel: Video Feeds & Live Captions (35% width) */}
-      <div className="w-[35%] flex flex-col p-4 gap-4">
+      {/* Left Panel: Camera & Controls */}
+      <div className="w-[35%] flex flex-col p-4 gap-4 border-r border-gray-800">
         
         {/* Top bar with timer */}
-        <div className="flex justify-between items-center bg-gray-800 px-4 py-3 rounded-lg border border-gray-700">
-          <span className="font-semibold text-red-400 font-mono tracking-wider">
-            45:00
-          </span>
-          <button className="bg-red-600 hover:bg-red-700 px-4 py-1.5 rounded text-sm font-medium transition-colors">
+        <div className="flex justify-between items-center bg-gray-800 px-4 py-3 rounded-xl border border-gray-700 shadow-sm">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+            <span className="font-semibold text-gray-200 font-mono tracking-wider">45:00</span>
+          </div>
+          <button className="bg-red-600/10 hover:bg-red-600 text-red-500 hover:text-white border border-red-600/50 px-4 py-1.5 rounded-lg text-sm font-bold transition-all">
             End Interview
           </button>
         </div>
 
-        {/* Video Components */}
-        <div className="flex-1">
+        {/* The New Video Feed Component */}
+        <div className="flex-1 min-h-0">
           <VideoFeed />
         </div>
 
-        {/* Live Transcript Box */}
-        <div className="h-32 bg-gray-800 rounded-xl p-4 border border-gray-700 overflow-y-auto">
-          <p className="text-sm text-gray-300">
-            <span className="text-blue-400 font-semibold">AI Interviewer: </span>
-            Hello! Let's get started. Could you write a function to solve the Two Sum problem?
-          </p>
+        {/* AI Action Simulator Buttons */}
+        <div className="bg-gray-800 p-4 rounded-xl border border-gray-700 shrink-0">
+          <p className="text-sm font-medium text-gray-400 mb-3">Simulate AI Switching Problems:</p>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setCurrentProblemId('two-sum')} className="bg-blue-600 hover:bg-blue-500 px-3 py-1.5 text-xs font-medium rounded shadow-sm">Two Sum</button>
+            <button onClick={() => setCurrentProblemId('fizz-buzz')} className="bg-blue-600 hover:bg-blue-500 px-3 py-1.5 text-xs font-medium rounded shadow-sm">Fizz Buzz</button>
+            <button onClick={() => setCurrentProblemId('valid-palindrome')} className="bg-blue-600 hover:bg-blue-500 px-3 py-1.5 text-xs font-medium rounded shadow-sm">Palindrome</button>
+            <button onClick={() => setCurrentProblemId('binary-search')} className="bg-blue-600 hover:bg-blue-500 px-3 py-1.5 text-xs font-medium rounded shadow-sm">Binary Search</button>
+          </div>
         </div>
+
       </div>
 
-      {/* Right Panel: Code Editor (65% width) */}
+      {/* Right Panel: The Dynamic Coding Environment */}
       <div className="w-[65%]">
-        <CodeEditor />
+        <CodeEditor problem={activeProblem} />
       </div>
 
     </div>
