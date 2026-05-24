@@ -3,37 +3,111 @@ import cors from 'cors';
 import vm from 'node:vm';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import WebSocket from 'ws'; // <-- NEW: Bypassing the SDK with standard WebSockets
+import OpenAI from 'openai';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 1. Create HTTP Server and bind Socket.io
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { 
-    origin: "*", // Allows your React app to connect
-    methods: ["GET", "POST"] 
-  } 
+  cors: { origin: "*", methods: ["GET", "POST"] } 
 });
 
-// 2. Handle WebSocket Connections for Audio Streaming
-io.on('connection', (socket) => {
-  console.log('🟢 User connected to interview room:', socket.id);
+// Initialize Groq (Using the OpenAI SDK pointing to Groq's API)
+const groq = new OpenAI({ 
+  apiKey: process.env.GROQ_API_KEY,
+  baseURL: "https://api.groq.com/openai/v1" 
+});
 
-  // Listen for the audio chunks from React
+const conversationHistory = [
+  { role: "system", content: "You are a strict but helpful technical interviewer. Keep responses under 2 sentences. Sound natural and conversational." }
+];
+
+io.on('connection', (socket) => {
+  console.log('🟢 User connected:', socket.id);
+
+  // 1. Connect directly to Deepgram using standard WebSockets
+  const deepgramUrl = 'wss://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&interim_results=false';
+  const dgConnection = new WebSocket(deepgramUrl, {
+    headers: {
+      Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`
+    }
+  });
+
+  dgConnection.on('open', () => {
+    console.log('⚡ Deepgram WebSocket connection opened');
+  });
+
+  // 2. Forward incoming audio chunks from React straight to Deepgram
   socket.on('user_audio_chunk', (chunk) => {
-    // Right now, we just log that we are receiving data.
-    // Soon, we will pipe this chunk into Deepgram/OpenAI!
-    console.log(`Received audio chunk from ${socket.id}: ${chunk.length} bytes`);
+    if (dgConnection.readyState === WebSocket.OPEN) {
+      dgConnection.send(chunk);
+    }
+  });
+
+  // 3. Receive Text Transcriptions back from Deepgram
+  dgConnection.on('message', async (data) => {
+    const response = JSON.parse(data);
+    
+    // Ensure it's a final transcript and not empty background noise
+    if (response.type === 'Results' && response.channel.alternatives[0].transcript.trim() !== '') {
+      const transcript = response.channel.alternatives[0].transcript;
+      
+      console.log("🗣️ Candidate said:", transcript);
+      conversationHistory.push({ role: "user", content: transcript });
+
+      try {
+        // A. Send to Groq for ultra-fast LLaMA 3 response
+        const completion = await groq.chat.completions.create({
+          model: "llama-3.1-8b-instant",
+          messages: conversationHistory,
+        });
+
+        const aiResponseText = completion.choices[0].message.content;
+        conversationHistory.push({ role: "assistant", content: aiResponseText });
+        
+        console.log("🤖 AI Interviewer says:", aiResponseText);
+        
+        // Emit text back to the React UI
+        socket.emit('ai_text_response', { text: aiResponseText });
+
+        // B. Generate Speech using Deepgram TTS REST API
+        const ttsResponse = await fetch("https://api.deepgram.com/v1/speak?model=aura-asteria-en", {
+          method: "POST",
+          headers: {
+            "Authorization": `Token ${process.env.DEEPGRAM_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ text: aiResponseText })
+        });
+
+        const buffer = Buffer.from(await ttsResponse.arrayBuffer());
+        socket.emit('ai_audio_response', { audio: buffer });
+
+      } catch (error) {
+        console.error("AI Pipeline Error:", error);
+      }
+    }
+  });
+
+  dgConnection.on('error', (error) => {
+    console.error("Deepgram WebSocket Error:", error);
   });
 
   socket.on('disconnect', () => {
     console.log('🔴 User disconnected:', socket.id);
+    if (dgConnection.readyState === WebSocket.OPEN) {
+      dgConnection.close();
+    }
   });
 });
 
-// 3. The Code Execution Database
+// --- CODE EXECUTION DATABASE & API ---
 const problemDatabase = {
   'two-sum': [
     { input: { nums: [2, 7, 11, 15], target: 9 }, expected: [0, 1] },
@@ -57,19 +131,14 @@ const problemDatabase = {
   ]
 };
 
-// 4. The Code Execution API Endpoint
 app.post('/api/execute', (req, res) => {
   const { code, problemId } = req.body;
   const testCases = problemDatabase[problemId];
 
-  if (!testCases) {
-    return res.status(404).json({ error: 'Problem not found on server.' });
-  }
+  if (!testCases) return res.status(404).json({ error: 'Problem not found on server.' });
 
   const results = testCases.map((testCase) => {
     const stringifiedExpected = JSON.stringify(testCase.expected);
-    
-    // Dynamically format the input display string based on the problem
     const inputKeys = Object.keys(testCase.input);
     const inputDisplay = inputKeys.map(k => `${k}: ${JSON.stringify(testCase.input[k])}`).join(', ');
 
@@ -77,21 +146,17 @@ app.post('/api/execute', (req, res) => {
       const sandbox = {};
       vm.createContext(sandbox);
 
-      // Determine the function name based on the problem ID to invoke it correctly
       let functionName = 'twoSum';
       if (problemId === 'fizz-buzz') functionName = 'fizzBuzz';
       if (problemId === 'valid-palindrome') functionName = 'isPalindrome';
       if (problemId === 'binary-search') functionName = 'search';
       if (problemId === 'contains-duplicate') functionName = 'containsDuplicate';
 
-      // Pass the arguments dynamically
       const args = inputKeys.map(k => JSON.stringify(testCase.input[k])).join(', ');
 
       const wrapperScript = `
         ${code}
-        if (typeof ${functionName} !== 'function') {
-          throw new Error("Function '${functionName}' is not defined. Did you change the boilerplate name?");
-        }
+        if (typeof ${functionName} !== 'function') throw new Error("Function missing.");
         ${functionName}(${args});
       `;
 
@@ -110,7 +175,6 @@ app.post('/api/execute', (req, res) => {
   res.json({ results });
 });
 
-// 5. Start the server using httpServer (not app.listen)
 httpServer.listen(3001, () => {
-  console.log(`🚀 Code execution and WebSocket backend running on http://localhost:3001`);
+  console.log(`🚀 AI Backend running on http://localhost:3001`);
 });
