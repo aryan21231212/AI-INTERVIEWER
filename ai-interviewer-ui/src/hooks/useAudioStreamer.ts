@@ -61,5 +61,17 @@ export function useAudioStreamer() {
     }
   };
 
-  return { isRecording, toggleMicrophone, aiTranscript };
+  // Add this new function to send code context
+interface TestResults {
+  success: boolean;
+  errors: string[];
+}
+
+const sendCodeUpdate = (code: string, testResults: TestResults) => {
+  if (socketRef.current) {
+    socketRef.current.emit('code_update', { code, testResults });
+  }
+};
+
+  return { isRecording, toggleMicrophone, aiTranscript,sendCodeUpdate };
 }

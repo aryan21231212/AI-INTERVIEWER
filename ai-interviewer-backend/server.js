@@ -3,7 +3,7 @@ import cors from 'cors';
 import vm from 'node:vm';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import WebSocket from 'ws'; // <-- NEW: Bypassing the SDK with standard WebSockets
+import WebSocket from 'ws';
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
 
@@ -42,6 +42,30 @@ io.on('connection', (socket) => {
   dgConnection.on('open', () => {
     console.log('⚡ Deepgram WebSocket connection opened');
   });
+
+  // ==========================================
+  // NEW: Receive Code Updates from React
+  // ==========================================
+  socket.on('code_update', (data) => {
+    const { code, testResults } = data;
+    
+    // Calculate how many tests passed
+    const passedCount = testResults.filter(r => r.passed).length;
+    const totalCount = testResults.length;
+    
+    // Inject a secret system prompt so the AI knows what just happened
+    const systemMessage = `[SYSTEM NOTE: The candidate just ran their code. They passed ${passedCount} out of ${totalCount} test cases. 
+    Here is their current code:
+    ${code}
+    
+    Do not critique immediately, but use this context to answer their next question or guide them if they failed.]`;
+
+    console.log(`💻 Candidate ran code: ${passedCount}/${totalCount} passed.`);
+    
+    // Add to the AI's memory
+    conversationHistory.push({ role: "system", content: systemMessage });
+  });
+  // ==========================================
 
   // 2. Forward incoming audio chunks from React straight to Deepgram
   socket.on('user_audio_chunk', (chunk) => {

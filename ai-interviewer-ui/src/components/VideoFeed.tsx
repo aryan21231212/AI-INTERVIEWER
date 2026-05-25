@@ -1,18 +1,18 @@
 import { useRef, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Mic, MicOff, Video, VideoOff, Settings, AlertCircle } from 'lucide-react';
-import { useAudioStreamer } from '../hooks/useAudioStreamer';
+import { Mic, MicOff, Video, VideoOff, AlertCircle } from 'lucide-react';
 
-export default function VideoFeed() {
-  const webcamRef = useRef<Webcam>(null);
+interface VideoFeedProps {
+  isRecording: boolean;
+  toggleMicrophone: () => void;
+  aiTranscript: string;
+}
+
+export default function VideoFeed({ isRecording, toggleMicrophone, aiTranscript }: VideoFeedProps) {
+  const webcamRef = useRef(null);
   const [isCamOn, setIsCamOn] = useState(true);
   const [camError, setCamError] = useState<string | null>(null);
-  
-  
-  // Bring in the real WebRTC microphone logic
-  const { isRecording, toggleMicrophone, aiTranscript } = useAudioStreamer();
 
-  // Handle webcam permission errors gracefully
   const handleUserMediaError = useCallback((error: string | DOMException) => {
     console.error("Webcam Error:", error);
     setCamError("Camera access denied or device busy.");

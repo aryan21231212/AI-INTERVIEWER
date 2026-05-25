@@ -1,11 +1,15 @@
 import { useState } from 'react';
 import CodeEditor from './CodeEditor';
-import VideoFeed from './VideoFeed'; // <-- Import the new component
+import VideoFeed from './VideoFeed';
 import { problemDatabase } from '../data/problems';
+import { useAudioStreamer } from '../hooks/useAudioStreamer'; // <-- Import the hook
 
 export default function InterviewRoom() {
   const [currentProblemId, setCurrentProblemId] = useState('two-sum'); 
   const activeProblem = problemDatabase[currentProblemId];
+
+  // Hoist the audio connection state up here
+  const { isRecording, toggleMicrophone, aiTranscript, sendCodeUpdate } = useAudioStreamer();
 
   return (
     <div className="h-screen w-full flex bg-gray-900 text-white overflow-hidden">
@@ -24,9 +28,13 @@ export default function InterviewRoom() {
           </button>
         </div>
 
-        {/* The New Video Feed Component */}
+        {/* The New Video Feed Component receiving props */}
         <div className="flex-1 min-h-0">
-          <VideoFeed />
+          <VideoFeed 
+            isRecording={isRecording} 
+            toggleMicrophone={toggleMicrophone} 
+            aiTranscript={aiTranscript} 
+          />
         </div>
 
         {/* AI Action Simulator Buttons */}
@@ -42,9 +50,9 @@ export default function InterviewRoom() {
 
       </div>
 
-      {/* Right Panel: The Dynamic Coding Environment */}
+      {/* Right Panel: The Dynamic Coding Environment receiving the sendCodeUpdate function */}
       <div className="w-[65%]">
-        <CodeEditor problem={activeProblem} />
+        <CodeEditor problem={activeProblem} onCodeRun={sendCodeUpdate} />
       </div>
 
     </div>

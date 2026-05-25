@@ -5,8 +5,8 @@ import type { Problem } from '../data/problems';
 
 interface CodeEditorProps {
   problem: Problem;
+  onCodeRun: (code: string, results: any) => void;
 }
-
 interface TestResult {
   passed: boolean;
   input: string;
@@ -15,7 +15,7 @@ interface TestResult {
   error?: string;
 }
 
-export default function CodeEditor({ problem }: CodeEditorProps) {
+export default function CodeEditor({ problem,onCodeRun }: CodeEditorProps) {
   const [language, setLanguage] = useState('javascript');
   const [code, setCode] = useState(problem.boilerplates['javascript']);
   const [activeTab, setActiveTab] = useState(0);
@@ -46,6 +46,9 @@ export default function CodeEditor({ problem }: CodeEditorProps) {
       });
       const data = await response.json();
       setResults(data.results);
+      
+      // NEW: Send the code and results to the AI!
+      onCodeRun(code, data.results);
     } catch (err) {
       console.error('Execution failed:', err);
     } finally {
