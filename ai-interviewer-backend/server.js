@@ -32,15 +32,61 @@ io.on('connection', (socket) => {
   console.log('🟢 User connected:', socket.id);
 
   // 1. Connect directly to Deepgram using standard WebSockets
-  const deepgramUrl = 'wss://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&interim_results=false';
+  const deepgramUrl = 'wss://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&interim_results=true';
   const dgConnection = new WebSocket(deepgramUrl, {
     headers: {
       Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`
     }
   });
 
-  dgConnection.on('open', () => {
-    console.log('⚡ Deepgram WebSocket connection opened');
+  // 3. Receive Text Transcriptions back from Deepgram
+  dgConnection.on('message', async (data) => {
+    const response = JSON.parse(data);
+    
+    if (response.type === 'Results') {
+      const transcript = response.channel.alternatives[0].transcript.trim();
+      if (transcript === '') return; // Ignore silence
+
+      // NEW: Interruption Logic
+      if (!response.is_final) {
+        // The user is actively speaking right now! Tell the frontend to stop AI audio.
+        socket.emit('ai_interrupted');
+        return; 
+      }
+
+      // If it is final, process it normally through Groq!
+      console.log("🗣️ Candidate said:", transcript);
+      conversationHistory.push({ role: "user", content: transcript });
+
+      try {
+        const completion = await groq.chat.completions.create({
+          model: "llama-3.1-8b-instant",
+          messages: conversationHistory,
+        });
+
+        const aiResponseText = completion.choices[0].message.content;
+        conversationHistory.push({ role: "assistant", content: aiResponseText });
+        
+        console.log("🤖 AI Interviewer says:", aiResponseText);
+        
+        socket.emit('ai_text_response', { text: aiResponseText });
+
+        const ttsResponse = await fetch("https://api.deepgram.com/v1/speak?model=aura-asteria-en", {
+          method: "POST",
+          headers: {
+            "Authorization": `Token ${process.env.DEEPGRAM_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ text: aiResponseText })
+        });
+
+        const buffer = Buffer.from(await ttsResponse.arrayBuffer());
+        socket.emit('ai_audio_response', { audio: buffer });
+
+      } catch (error) {
+        console.error("AI Pipeline Error:", error);
+      }
+    }
   });
 
   // ==========================================
@@ -73,6 +119,46 @@ io.on('connection', (socket) => {
       dgConnection.send(chunk);
     }
   });
+
+  // ==========================================
+  // NEW: The Interview Grader
+  // ==========================================
+  socket.on('end_interview', async () => {
+    console.log("🛑 Interview ended. Generating report...");
+    
+    const gradingPrompt = {
+      role: "system",
+      content: `The interview is now over. Evaluate the candidate based on the entire conversation history.
+      You MUST return your response as a valid JSON object with the exact following structure:
+      {
+        "scores": {
+          "dataStructures": <number 1-10>,
+          "problemSolving": <number 1-10>,
+          "communication": <number 1-10>
+        },
+        "feedback": "<2-3 sentences of constructive feedback>",
+        "hireDecision": "<Strong Hire, Hire, Leaning No Hire, or No Hire>"
+      }`
+    };
+
+    try {
+      const completion = await groq.chat.completions.create({
+        model: "llama-3.1-8b-instant",
+        messages: [...conversationHistory, gradingPrompt],
+        response_format: { type: "json_object" } // This guarantees JSON output!
+      });
+
+      const reportData = JSON.parse(completion.choices[0].message.content);
+      console.log("📊 Report Generated:", reportData);
+      
+      // Send the report back to the React UI
+      socket.emit('interview_report', reportData);
+
+    } catch (error) {
+      console.error("Grading Generation Error:", error);
+    }
+  });
+  // ==========================================
 
   // 3. Receive Text Transcriptions back from Deepgram
   dgConnection.on('message', async (data) => {
