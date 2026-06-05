@@ -6,31 +6,74 @@ import { Server } from 'socket.io';
 import WebSocket from 'ws';
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
+import multer from 'multer';
 
+// NEW: Node.js built-in tools to run Python and manage files
+import { exec } from 'node:child_process';
+import util from 'node:util';
+import fs from 'node:fs';
+
+const execAsync = util.promisify(exec);
 dotenv.config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Set Multer to save files to a temporary 'uploads' folder on your disk
+const upload = multer({ dest: 'uploads/' });
+
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: "*", methods: ["GET", "POST"] } 
 });
 
-// Initialize Groq
 const groq = new OpenAI({ 
   apiKey: process.env.GROQ_API_KEY,
   baseURL: "https://api.groq.com/openai/v1" 
 });
 
-// Keep track of active timers for each connected user to handle silence debouncing
 const userSilenceTimers = new Map();
+
+// ==========================================
+// THE BULLETPROOF PYTHON BRIDGE
+// ==========================================
+app.post('/api/parse-resume', upload.single('resume'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    console.log(`📄 Received PDF: ${req.file.originalname}, handing off to Python...`);
+    const filePath = req.file.path;
+
+    // Execute the Python script and pass the file path
+    const { stdout, stderr } = await execAsync(`python3 pdf_parser.py "${filePath}"`);
+
+    // Immediately delete the file from the server to save space
+    fs.unlinkSync(filePath);
+
+    if (stderr) console.warn("Python Warning:", stderr);
+
+    // Clean up the extracted text
+    const cleanText = stdout.replace(/\s+/g, ' ').trim();
+
+    console.log(`✅ Python successfully extracted ${cleanText.length} characters of text!`);
+    res.json({ text: cleanText });
+
+  } catch (error) {
+    console.error('Python Parsing Error:', error);
+    // Ensure file gets deleted even if Python crashes
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    res.status(500).json({ error: 'Failed to parse PDF' });
+  }
+});
+// ==========================================
+
 
 io.on('connection', (socket) => {
   console.log('🟢 User connected:', socket.id);
 
-  // Session-scoped history (resets when you refresh the page)
   const conversationHistory = [
     { 
       role: "system", 
@@ -38,7 +81,6 @@ io.on('connection', (socket) => {
     }
   ];
 
-  // 1. Connect directly to Deepgram
   const deepgramUrl = 'wss://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&interim_results=true';
   const dgConnection = new WebSocket(deepgramUrl, {
     headers: { Authorization: `Token ${process.env.DEEPGRAM_API_KEY}` }
@@ -48,31 +90,24 @@ io.on('connection', (socket) => {
     console.log('⚡ Deepgram WebSocket connection opened');
   });
 
-  // 2. Forward incoming audio chunks from React to Deepgram
   socket.on('user_audio_chunk', (chunk) => {
     if (dgConnection.readyState === WebSocket.OPEN) {
       dgConnection.send(chunk);
     }
   });
 
-  // Maintain a local buffer of the user's active sentence fragments
   let speechBuffer = "";
 
-  // 3. Receive Text Transcriptions back from Deepgram (ULTRA-SMOOTH PIPELINE)
   dgConnection.on('message', async (data) => {
     const response = JSON.parse(data);
     
     if (response.type === 'Results') {
       const transcript = response.channel.alternatives[0].transcript.trim();
-      if (transcript === '') return; // Ignore pure silence
+      if (transcript === '') return; 
 
-      // A. INTELLIGENT BARGE-IN (Interim Results)
       if (!response.is_final) {
         if (transcript.length > 2) {
-          // The user is actively speaking right now! Shut the AI up.
           socket.emit('ai_interrupted');
-          
-          // Clear any pending LLM execution timers because the user isn't done speaking
           if (userSilenceTimers.has(socket.id)) {
             clearTimeout(userSilenceTimers.get(socket.id));
           }
@@ -80,20 +115,16 @@ io.on('connection', (socket) => {
         return; 
       }
 
-      // B. BUFFER SPEECH (Final fragments)
       speechBuffer += " " + transcript;
 
-      // C. SILENCE DEBOUNCE FILTER
       if (userSilenceTimers.has(socket.id)) {
         clearTimeout(userSilenceTimers.get(socket.id));
       }
 
-      // Wait 800ms of complete silence before sending to Groq
       const timeoutId = setTimeout(async () => {
         const finalPhrase = speechBuffer.trim();
-        speechBuffer = ""; // Reset buffer for the next conversational turn
+        speechBuffer = ""; 
 
-        // Ignore meaningless snippets or pure filler words (breathing, clicking, etc.)
         if (finalPhrase.length <= 2 || ["uh", "um", "ah", "okay", "so"].includes(finalPhrase.toLowerCase())) {
           return;
         }
@@ -102,7 +133,6 @@ io.on('connection', (socket) => {
         conversationHistory.push({ role: "user", content: finalPhrase });
 
         try {
-          // Send to Groq
           const completion = await groq.chat.completions.create({
             model: "llama-3.1-8b-instant",
             messages: conversationHistory,
@@ -114,7 +144,6 @@ io.on('connection', (socket) => {
           console.log("🤖 AI Interviewer says:", aiResponseText);
           socket.emit('ai_text_response', { text: aiResponseText });
 
-          // Generate Speech using Deepgram TTS
           const ttsResponse = await fetch("https://api.deepgram.com/v1/speak?model=aura-asteria-en", {
             method: "POST",
             headers: {
@@ -130,13 +159,12 @@ io.on('connection', (socket) => {
         } catch (error) {
           console.error("AI Pipeline Error:", error);
         }
-      }, 800); // <-- The 800ms magic pause threshold
+      }, 800); 
 
       userSilenceTimers.set(socket.id, timeoutId);
     }
   });
 
-  // 4. Receive Code Updates from React
   socket.on('code_update', (data) => {
     const { code, testResults } = data;
     const passedCount = testResults.filter(r => r.passed).length;
@@ -152,7 +180,6 @@ io.on('connection', (socket) => {
     conversationHistory.push({ role: "system", content: systemMessage });
   });
 
-  // 5. The Interview Grader
   socket.on('end_interview', async () => {
     console.log("🛑 Interview ended. Generating report...");
     
@@ -203,27 +230,10 @@ io.on('connection', (socket) => {
   });
 });
 
-// --- CODE EXECUTION DATABASE & API ---
 const problemDatabase = {
   'two-sum': [
     { input: { nums: [2, 7, 11, 15], target: 9 }, expected: [0, 1] },
     { input: { nums: [3, 2, 4], target: 6 }, expected: [1, 2] }
-  ],
-  'fizz-buzz': [
-    { input: { n: 3 }, expected: ["1", "2", "Fizz"] },
-    { input: { n: 5 }, expected: ["1", "2", "Fizz", "4", "Buzz"] }
-  ],
-  'valid-palindrome': [
-    { input: { s: "A man, a plan, a canal: Panama" }, expected: true },
-    { input: { s: "race a car" }, expected: false }
-  ],
-  'binary-search': [
-    { input: { nums: [-1, 0, 3, 5, 9, 12], target: 9 }, expected: 4 },
-    { input: { nums: [-1, 0, 3, 5, 9, 12], target: 2 }, expected: -1 }
-  ],
-  'contains-duplicate': [
-    { input: { nums: [1, 2, 3, 1] }, expected: true },
-    { input: { nums: [1, 2, 3, 4] }, expected: false }
   ]
 };
 
@@ -241,27 +251,13 @@ app.post('/api/execute', (req, res) => {
     try {
       const sandbox = {};
       vm.createContext(sandbox);
-
       let functionName = 'twoSum';
-      if (problemId === 'fizz-buzz') functionName = 'fizzBuzz';
-      if (problemId === 'valid-palindrome') functionName = 'isPalindrome';
-      if (problemId === 'binary-search') functionName = 'search';
-      if (problemId === 'contains-duplicate') functionName = 'containsDuplicate';
-
       const args = inputKeys.map(k => JSON.stringify(testCase.input[k])).join(', ');
-
-      const wrapperScript = `
-        ${code}
-        if (typeof ${functionName} !== 'function') throw new Error("Function missing.");
-        ${functionName}(${args});
-      `;
-
+      const wrapperScript = `${code}\nif (typeof ${functionName} !== 'function') throw new Error("Function missing.");\n${functionName}(${args});`;
       const script = new vm.Script(wrapperScript);
       const rawOutput = script.runInContext(sandbox, { timeout: 1000 });
-      
       const stringifiedActual = JSON.stringify(rawOutput);
       const passed = stringifiedActual === stringifiedExpected;
-
       return { passed, input: inputDisplay, expected: stringifiedExpected, actual: stringifiedActual || 'undefined' };
     } catch (error) {
       return { passed: false, input: inputDisplay, expected: stringifiedExpected, actual: 'Execution Error', error: error.message };
