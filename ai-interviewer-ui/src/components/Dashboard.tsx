@@ -2,25 +2,50 @@ import { useState } from 'react';
 import { Upload, Briefcase, Award, ArrowRight } from 'lucide-react';
 
 interface DashboardProps {
-  onStartInterview: (config: { role: string; level: string }) => void;
+  // We updated this to also pass the raw text of the resume to the parent!
+  onStartInterview: (config: { role: string; level: string; resumeText: string }) => void;
 }
 
 export default function Dashboard({ onStartInterview }: DashboardProps) {
   const [role, setRole] = useState('');
   const [level, setLevel] = useState('Junior');
+  const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!role) return;
+    if (!role || !resumeFile) {
+      alert("Please enter a role and upload a resume.");
+      return;
+    }
 
     setIsAnalyzing(true);
     
-    // Simulate AI analyzing the resume for 2 seconds before starting
-    setTimeout(() => {
+    try {
+      // 1. Prepare the file to be sent to our backend
+      const formData = new FormData();
+      formData.append('resume', resumeFile);
+
+      // 2. Send it to the new PDF parser endpoint we are about to build
+      const response = await fetch('http://localhost:3001/api/parse-resume', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (data.text) {
+        // 3. Start the interview with the extracted text!
+        onStartInterview({ role, level, resumeText: data.text });
+      } else {
+        throw new Error("Could not extract text from PDF");
+      }
+    } catch (error) {
+      console.error("Resume parsing error:", error);
+      alert("Failed to parse resume. Please try a different PDF.");
+    } finally {
       setIsAnalyzing(false);
-      onStartInterview({ role, level });
-    }, 2000);
+    }
   };
 
   return (
@@ -75,13 +100,27 @@ export default function Dashboard({ onStartInterview }: DashboardProps) {
           <label className="text-sm font-medium text-gray-300 flex items-center gap-2">
             <Upload size={16} className="text-blue-400" /> Upload Resume (PDF)
           </label>
-          <div className="border-2 border-dashed border-gray-700 hover:border-blue-500/50 bg-gray-900/50 rounded-2xl p-8 text-center cursor-pointer transition-colors group">
-            <input type="file" accept=".pdf" className="hidden" id="resume-upload" />
-            <label htmlFor="resume-upload" className="cursor-pointer flex flex-col items-center">
-              <Upload size={32} className="text-gray-500 group-hover:text-blue-400 mb-3 transition-colors" />
-              <span className="text-sm font-medium text-gray-300">Click to upload your resume</span>
+          <div className="border-2 border-dashed border-gray-700 hover:border-blue-500/50 bg-gray-900/50 rounded-2xl p-8 text-center cursor-pointer transition-colors group relative">
+            
+            {/* Added onChange to actually grab the file! */}
+            <input 
+              type="file" 
+              accept=".pdf" 
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" 
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  setResumeFile(e.target.files[0]);
+                }
+              }} 
+            />
+            
+            <div className="flex flex-col items-center pointer-events-none">
+              <Upload size={32} className={`${resumeFile ? 'text-blue-400' : 'text-gray-500'} mb-3 transition-colors`} />
+              <span className="text-sm font-medium text-gray-300">
+                {resumeFile ? resumeFile.name : "Click to upload your resume"}
+              </span>
               <span className="text-xs text-gray-500 mt-1">PDF files up to 5MB</span>
-            </label>
+            </div>
           </div>
         </div>
 
@@ -94,7 +133,7 @@ export default function Dashboard({ onStartInterview }: DashboardProps) {
           {isAnalyzing ? (
             <>
               <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              AI Analyzing Resume & Generating Questions...
+              Extracting Resume Data...
             </>
           ) : (
             <>
