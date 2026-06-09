@@ -8,10 +8,13 @@ import OpenAI from 'openai';
 import dotenv from 'dotenv';
 import multer from 'multer';
 
-// NEW: Node.js built-in tools to run Python and manage files
+// Node.js built-in tools to run Python and manage files
 import { exec } from 'node:child_process';
 import util from 'node:util';
 import fs from 'node:fs';
+
+// NEW: Import our dynamic problems database!
+import { problems } from './problems.js';
 
 const execAsync = util.promisify(exec);
 dotenv.config();
@@ -74,12 +77,66 @@ app.post('/api/parse-resume', upload.single('resume'), async (req, res) => {
 io.on('connection', (socket) => {
   console.log('🟢 User connected:', socket.id);
 
-  const conversationHistory = [
-    { 
-      role: "system", 
-      content: "You are a realistic, senior human technical interviewer. Follow these rules strictly:\n1. Keep responses under 2 short sentences.\n2. Never ask multi-part or compound questions. Ask exactly ONE clear question at a time.\n3. Acknowledge what the user said naturally, like a human would.\n4. If the user's input seems cut off or partial, just ask them to continue gently." 
+  // Leave history empty initially
+  let conversationHistory = [];
+
+  // ==========================================
+  // NEW: Initialize the AI with the Resume
+  // ==========================================
+  socket.on('initialize_session', async (config) => {
+    const { role, level, resumeText } = config;
+    
+    // Truncate resume text just in case it's massive to save LLM tokens
+    const truncatedResume = resumeText.substring(0, 2500);
+
+    const systemPrompt = `You are a realistic, senior human technical interviewer hiring for a ${level} ${role} position.
+    Here is the candidate's parsed resume:
+    ---
+    ${truncatedResume}
+    ---
+    Follow these rules strictly:
+    1. Keep responses under 2 short sentences.
+    2. Never ask multi-part or compound questions. Ask exactly ONE clear question at a time.
+    3. Acknowledge their specific experience from the resume naturally.
+    4. Start the interview immediately.`;
+
+    conversationHistory.push({ role: "system", content: systemPrompt });
+    console.log(`🧠 AI Brain initialized for ${level} ${role} with resume context.`);
+
+    // TRIGGER THE FIRST GREETING AUTOMATICALLY
+    try {
+      // Secretly simulate the user saying "I'm ready" so the AI speaks first
+      const initMessage = [...conversationHistory, { role: "user", content: "Hi, I'm ready to start the interview." }];
+      
+      const completion = await groq.chat.completions.create({
+        model: "llama-3.1-8b-instant",
+        messages: initMessage,
+      });
+
+      const aiResponseText = completion.choices[0].message.content;
+      conversationHistory.push({ role: "assistant", content: aiResponseText });
+      
+      console.log("🤖 AI Interviewer starts:", aiResponseText);
+      socket.emit('ai_text_response', { text: aiResponseText });
+
+      // Generate the opening audio
+      const ttsResponse = await fetch("https://api.deepgram.com/v1/speak?model=aura-asteria-en", {
+        method: "POST",
+        headers: {
+          "Authorization": `Token ${process.env.DEEPGRAM_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ text: aiResponseText })
+      });
+
+      const buffer = Buffer.from(await ttsResponse.arrayBuffer());
+      socket.emit('ai_audio_response', { audio: buffer });
+
+    } catch (error) {
+      console.error("AI Initialization Error:", error);
     }
-  ];
+  });
+  // ==========================================
 
   const deepgramUrl = 'wss://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&interim_results=true';
   const dgConnection = new WebSocket(deepgramUrl, {
@@ -230,20 +287,36 @@ io.on('connection', (socket) => {
   });
 });
 
-const problemDatabase = {
-  'two-sum': [
-    { input: { nums: [2, 7, 11, 15], target: 9 }, expected: [0, 1] },
-    { input: { nums: [3, 2, 4], target: 6 }, expected: [1, 2] }
-  ]
-};
+// ==========================================
+// DYNAMIC CODING API ENDPOINTS
+// ==========================================
 
+// 1. Fetch Problem Details (Title, Description, Starter Code)
+app.get('/api/problems/:id', (req, res) => {
+  const problemId = req.params.id;
+  const problem = problems[problemId];
+
+  if (!problem) {
+    return res.status(404).json({ error: 'Problem not found' });
+  }
+
+  // Hide the expected testcase answers from the frontend!
+  res.json({
+    id: problem.id,
+    title: problem.title,
+    description: problem.description,
+    starterCode: problem.starterCode
+  });
+});
+
+// 2. Execute Code dynamically based on the problems.js database
 app.post('/api/execute', (req, res) => {
   const { code, problemId } = req.body;
-  const testCases = problemDatabase[problemId];
+  const problem = problems[problemId];
 
-  if (!testCases) return res.status(404).json({ error: 'Problem not found on server.' });
+  if (!problem) return res.status(404).json({ error: 'Problem not found on server.' });
 
-  const results = testCases.map((testCase) => {
+  const results = problem.testCases.map((testCase) => {
     const stringifiedExpected = JSON.stringify(testCase.expected);
     const inputKeys = Object.keys(testCase.input);
     const inputDisplay = inputKeys.map(k => `${k}: ${JSON.stringify(testCase.input[k])}`).join(', ');
@@ -251,13 +324,20 @@ app.post('/api/execute', (req, res) => {
     try {
       const sandbox = {};
       vm.createContext(sandbox);
-      let functionName = 'twoSum';
+      
+      // Auto-extract function name from the starter code
+      const funcNameMatch = problem.starterCode.match(/function\s+([a-zA-Z0-9_]+)\s*\(/);
+      if (!funcNameMatch) throw new Error("Could not find function signature.");
+      const functionName = funcNameMatch[1];
+
       const args = inputKeys.map(k => JSON.stringify(testCase.input[k])).join(', ');
       const wrapperScript = `${code}\nif (typeof ${functionName} !== 'function') throw new Error("Function missing.");\n${functionName}(${args});`;
+      
       const script = new vm.Script(wrapperScript);
       const rawOutput = script.runInContext(sandbox, { timeout: 1000 });
       const stringifiedActual = JSON.stringify(rawOutput);
       const passed = stringifiedActual === stringifiedExpected;
+      
       return { passed, input: inputDisplay, expected: stringifiedExpected, actual: stringifiedActual || 'undefined' };
     } catch (error) {
       return { passed: false, input: inputDisplay, expected: stringifiedExpected, actual: 'Execution Error', error: error.message };
