@@ -3,14 +3,14 @@ import CodeEditor from './CodeEditor';
 import VideoFeed from './VideoFeed';
 import { problemDatabase } from '../data/problems';
 import { useAudioStreamer } from '../hooks/useAudioStreamer';
+import type { InterviewConfig }  from '../types';
 
-export default function InterviewRoom() {
+export default function InterviewRoom({ config }: { config: InterviewConfig }) {
   const [currentProblemId, setCurrentProblemId] = useState('two-sum'); 
   const activeProblem = problemDatabase[currentProblemId];
 
-  // Pull in the new endInterview function and interviewReport state
-  const { isRecording, toggleMicrophone, aiTranscript, sendCodeUpdate, endInterview, interviewReport } = useAudioStreamer();
-
+  // Pass the config into the hook!
+  const { isRecording, toggleMicrophone, aiTranscript, sendCodeUpdate, endInterview, interviewReport } = useAudioStreamer(config);
   return (
     <div className="h-screen w-full flex bg-gray-900 text-white overflow-hidden relative">
       

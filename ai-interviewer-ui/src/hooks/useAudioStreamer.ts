@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 
-export function useAudioStreamer() {
+// Pass the config into the hook as an argument
+export function useAudioStreamer(config: any) {
   const [isRecording, setIsRecording] = useState(false);
   const [aiTranscript, setAiTranscript] = useState('Waiting to start...');
   const [interviewReport, setInterviewReport] = useState<any>(null);
@@ -9,7 +10,7 @@ export function useAudioStreamer() {
   const socketRef = useRef<Socket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
-  // NEW: Audio Queue System for seamless playback and interruption
+  // Audio Queue System for seamless playback and interruption
   const audioQueue = useRef<Blob[]>([]);
   const isPlaying = useRef(false);
   const currentAudio = useRef<HTMLAudioElement | null>(null);
@@ -34,9 +35,17 @@ export function useAudioStreamer() {
   useEffect(() => {
     socketRef.current = io('http://localhost:3001');
     
+    // ==========================================
+    // NEW: Initialize the AI Brain instantly!
+    // ==========================================
+    if (config) {
+      socketRef.current.emit('initialize_session', config);
+    }
+    
     socketRef.current.on('ai_text_response', (data) => {
       setAiTranscript(data.text);
     });
+    
     // Catch the final grading report
     socketRef.current.on('interview_report', (report) => {
       setInterviewReport(report);
@@ -52,7 +61,7 @@ export function useAudioStreamer() {
       }
     });
 
-    // NEW: The Interruption Listener!
+    // The Interruption Listener!
     socketRef.current.on('ai_interrupted', () => {
       console.log("🛑 AI Interrupted by user!");
       setAiTranscript("Listening...");
@@ -67,7 +76,7 @@ export function useAudioStreamer() {
     return () => {
       socketRef.current?.disconnect();
     };
-  }, []);
+  }, [config]); // Added config as dependency
 
   const toggleMicrophone = async () => {
     if (isRecording) {

@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Upload, Briefcase, Award, ArrowRight } from 'lucide-react';
+import type { InterviewConfig } from '../types'; // <-- Import the new type!
 
 interface DashboardProps {
-  // We updated this to also pass the raw text of the resume to the parent!
-  onStartInterview: (config: { role: string; level: string; resumeText: string }) => void;
+  // Use the shared type here instead of writing it out manually
+  onStartInterview: (config: InterviewConfig) => void; 
 }
 
 export default function Dashboard({ onStartInterview }: DashboardProps) {
