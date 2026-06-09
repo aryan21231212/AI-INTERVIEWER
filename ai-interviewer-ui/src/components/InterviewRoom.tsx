@@ -1,16 +1,57 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import CodeEditor from './CodeEditor';
 import VideoFeed from './VideoFeed';
-import { problemDatabase } from '../data/problems';
 import { useAudioStreamer } from '../hooks/useAudioStreamer';
-import type { InterviewConfig }  from '../types';
+import type { InterviewConfig } from '../types';
+
+// ==========================================
+// FIX: Updated to match the rich LeetCode format!
+// ==========================================
+export interface ProblemData {
+  id: string;
+  title: string;
+  difficulty: string;
+  timeLimit: string;
+  description: string[];
+  examples: { input: string; output: string; explanation: string | null }[];
+  constraints: string[];
+  starterCode: string;
+}
 
 export default function InterviewRoom({ config }: { config: InterviewConfig }) {
   const [currentProblemId, setCurrentProblemId] = useState('two-sum'); 
-  const activeProblem = problemDatabase[currentProblemId];
+  const [activeProblem, setActiveProblem] = useState<ProblemData | null>(null);
+  const [isFetching, setIsFetching] = useState(true);
 
-  // Pass the config into the hook!
-  const { isRecording, toggleMicrophone, aiTranscript, sendCodeUpdate, endInterview, interviewReport } = useAudioStreamer(config);
+  // Hook handles audio, socket connection, and immediate AI initialization
+  const { 
+    isRecording, 
+    toggleMicrophone, 
+    aiTranscript, 
+    sendCodeUpdate, 
+    endInterview, 
+    interviewReport,
+    // We will need a new function here soon to tell the AI we switched problems!
+  } = useAudioStreamer(config);
+
+  // Fetch problem dynamically from Backend
+  useEffect(() => {
+    const fetchProblem = async () => {
+      setIsFetching(true);
+      try {
+        const response = await fetch(`http://localhost:3001/api/problems/${currentProblemId}`);
+        const data = await response.json();
+        setActiveProblem(data);
+      } catch (err) {
+        console.error("Failed to fetch problem:", err);
+      } finally {
+        setIsFetching(false);
+      }
+    };
+
+    fetchProblem();
+  }, [currentProblemId]); 
+
   return (
     <div className="h-screen w-full flex bg-gray-900 text-white overflow-hidden relative">
       
@@ -81,7 +122,6 @@ export default function InterviewRoom({ config }: { config: InterviewConfig }) {
             <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
             <span className="font-semibold text-gray-200 font-mono tracking-wider">45:00</span>
           </div>
-          {/* Wire up the End Interview Button */}
           <button 
             onClick={endInterview}
             className="bg-red-600/10 hover:bg-red-600 text-red-500 hover:text-white border border-red-600/50 px-4 py-1.5 rounded-lg text-sm font-bold transition-all"
@@ -112,8 +152,15 @@ export default function InterviewRoom({ config }: { config: InterviewConfig }) {
       </div>
 
       {/* Right Panel: The Dynamic Coding Environment */}
-      <div className="w-[65%]">
-        <CodeEditor problem={activeProblem} onCodeRun={sendCodeUpdate} />
+      <div className="w-[65%] flex flex-col">
+        {isFetching || !activeProblem ? (
+          <div className="flex-1 flex flex-col items-center justify-center gap-4">
+            <div className="w-10 h-10 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+            <p className="text-gray-400 animate-pulse">Loading problem...</p>
+          </div>
+        ) : (
+          <CodeEditor problem={activeProblem} onCodeRun={sendCodeUpdate} />
+        )}
       </div>
 
     </div>

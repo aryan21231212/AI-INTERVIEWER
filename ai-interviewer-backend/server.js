@@ -14,7 +14,7 @@ import util from 'node:util';
 import fs from 'node:fs';
 
 // NEW: Import our dynamic problems database!
-import { problems } from './problems.js';
+import  {problems}  from './problem.js';
 
 const execAsync = util.promisify(exec);
 dotenv.config();
@@ -304,7 +304,11 @@ app.get('/api/problems/:id', (req, res) => {
   res.json({
     id: problem.id,
     title: problem.title,
+    difficulty: problem.difficulty,
+    timeLimit: problem.timeLimit,
     description: problem.description,
+    examples: problem.examples,
+    constraints: problem.constraints,
     starterCode: problem.starterCode
   });
 });
