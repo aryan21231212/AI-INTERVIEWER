@@ -44,7 +44,7 @@ export default function CodeEditor({ problem, onCodeRun }: CodeEditorProps) {
     setResults(null);
 
     try {
-      const response = await fetch('https://eval-ai-dbvz.onrender.com/api/execute', {
+      const response = await fetch('https://eval-ai-3.onrender.com/api/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, problemId: problem.id }),

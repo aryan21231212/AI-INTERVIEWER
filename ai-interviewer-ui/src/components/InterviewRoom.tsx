@@ -39,7 +39,7 @@ export default function InterviewRoom({ config }: { config: InterviewConfig }) {
     const fetchProblem = async () => {
       setIsFetching(true);
       try {
-        const response = await fetch(`https://eval-ai-dbvz.onrender.com/api/problems/${currentProblemId}`);
+        const response = await fetch(`https://eval-ai-3.onrender.com/api/problems/${currentProblemId}`);
         const data = await response.json();
         setActiveProblem(data);
       } catch (err) {
