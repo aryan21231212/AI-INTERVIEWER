@@ -28,7 +28,7 @@ export default function Dashboard({ onStartInterview }: DashboardProps) {
       formData.append('resume', resumeFile);
 
       // 2. Send it to the new PDF parser endpoint we are about to build
-      const response = await fetch('http://localhost:3001/api/parse-resume', {
+      const response = await fetch('https://eval-ai-dbvz.onrender.com/api/parse-resume', {
         method: 'POST',
         body: formData,
       });

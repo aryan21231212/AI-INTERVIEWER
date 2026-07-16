@@ -33,7 +33,7 @@ export function useAudioStreamer(config: any) {
   };
 
   useEffect(() => {
-    socketRef.current = io('http://localhost:3001');
+    socketRef.current = io('https://eval-ai-dbvz.onrender.com');
     
     // ==========================================
     // NEW: Initialize the AI Brain instantly!
