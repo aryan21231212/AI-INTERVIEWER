@@ -12,10 +12,14 @@ import multer from 'multer';
 import { exec } from 'node:child_process';
 import util from 'node:util';
 import fs from 'node:fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-// NEW: Import our dynamic problems database!
-import  {problems}  from './problem.js';
+// Import our dynamic problems database!
+import { problems } from './problem.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const execAsync = util.promisify(exec);
 dotenv.config();
 
@@ -50,8 +54,9 @@ app.post('/api/parse-resume', upload.single('resume'), async (req, res) => {
     console.log(`📄 Received PDF: ${req.file.originalname}, handing off to Python...`);
     const filePath = req.file.path;
 
-    // Execute the Python script and pass the file path
-    const { stdout, stderr } = await execAsync(`python3 pdf_parser.py "${filePath}"`);
+    // Execute the Python script using an absolute path (fixes Render Docker pathing issues)
+    const scriptPath = path.join(__dirname, 'pdf_parser.py');
+    const { stdout, stderr } = await execAsync(`python3 "${scriptPath}" "${filePath}"`);
 
     // Immediately delete the file from the server to save space
     fs.unlinkSync(filePath);
@@ -81,7 +86,7 @@ io.on('connection', (socket) => {
   let conversationHistory = [];
 
   // ==========================================
-  // NEW: Initialize the AI with the Resume
+  // Initialize the AI with the Resume
   // ==========================================
   socket.on('initialize_session', async (config) => {
     const { role, level, resumeText } = config;
@@ -240,6 +245,28 @@ io.on('connection', (socket) => {
   socket.on('end_interview', async () => {
     console.log("🛑 Interview ended. Generating report...");
     
+    // ==========================================
+    // LAYER 1: The Short-Circuit (Anti-Ghosting)
+    // ==========================================
+    // Count how many times the user spoke or ran code
+    const userInteractions = conversationHistory.filter(msg => 
+      msg.role === 'user' || 
+      (msg.role === 'system' && msg.content.includes('Candidate just ran their code'))
+    ).length;
+
+    // If they basically just said "hello" and then clicked End Interview
+    if (userInteractions < 2) {
+      console.log("⚠️ Candidate did not interact enough. Auto-failing to save API costs.");
+      return socket.emit('interview_report', {
+        scores: { dataStructures: 0, problemSolving: 0, communication: 0 },
+        feedback: "The candidate ended the interview prematurely without providing sufficient signal. No meaningful code was written and minimal communication occurred.",
+        hireDecision: "Strong No Hire"
+      });
+    }
+
+    // ==========================================
+    // LAYER 2: The Aggressive Strict AI Prompt
+    // ==========================================
     const gradingPrompt = {
       role: "system",
       content: `The interview is now over. Evaluate the candidate based on the entire conversation history.
@@ -252,7 +279,13 @@ io.on('connection', (socket) => {
         },
         "feedback": "<2-3 sentences of constructive feedback>",
         "hireDecision": "<Strong Hire, Hire, Leaning No Hire, or No Hire>"
-      }`
+      }
+      
+      CRITICAL INSTRUCTIONS:
+      1. STRICT SILENCE RULE: If the transcript indicates the candidate said almost nothing of substance, give scores of 0.
+      2. NO CODE RULE: If there is no system note saying the candidate successfully ran code, give a 0 for Problem Solving and Data Structures.
+      3. If either of the above are true, the hireDecision MUST be "Strong No Hire".
+      4. DO NOT invent, hallucinate, or assume any positive performance. Grade ONLY based on the exact text provided.`
     };
 
     try {

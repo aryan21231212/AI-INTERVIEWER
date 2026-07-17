@@ -4,9 +4,6 @@ import VideoFeed from './VideoFeed';
 import { useAudioStreamer } from '../hooks/useAudioStreamer';
 import type { InterviewConfig } from '../types';
 
-// ==========================================
-// FIX: Updated to match the rich LeetCode format!
-// ==========================================
 export interface ProblemData {
   id: string;
   title: string;
@@ -22,24 +19,50 @@ export default function InterviewRoom({ config }: { config: InterviewConfig }) {
   const [currentProblemId, setCurrentProblemId] = useState('two-sum'); 
   const [activeProblem, setActiveProblem] = useState<ProblemData | null>(null);
   const [isFetching, setIsFetching] = useState(true);
+  
+  // ==========================================
+  // NEW: 25 Minute Timer State (25 * 60 = 1500 seconds)
+  // ==========================================
+  const [timeLeft, setTimeLeft] = useState(25 * 60);
 
-  // Hook handles audio, socket connection, and immediate AI initialization
   const { 
     isRecording, 
     toggleMicrophone, 
     aiTranscript, 
     sendCodeUpdate, 
     endInterview, 
-    interviewReport,
-    // We will need a new function here soon to tell the AI we switched problems!
+    interviewReport 
   } = useAudioStreamer(config);
+
+  // ==========================================
+  // NEW: Timer Countdown Effect
+  // ==========================================
+  useEffect(() => {
+    // Stop counting if the interview is over or time runs out
+    if (interviewReport) return;
+    if (timeLeft <= 0) {
+      endInterview(); // Auto-end interview when time hits 0
+      return;
+    }
+
+    const timerInterval = setInterval(() => {
+      setTimeLeft((prev) => prev - 1);
+    }, 1000);
+
+    return () => clearInterval(timerInterval);
+  }, [timeLeft, interviewReport, endInterview]);
+
+  // Format the time as MM:SS
+  const minutes = Math.floor(timeLeft / 60);
+  const seconds = timeLeft % 60;
+  const formattedTime = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
   // Fetch problem dynamically from Backend
   useEffect(() => {
     const fetchProblem = async () => {
       setIsFetching(true);
       try {
-        const response = await fetch(`https://eval-ai-3.onrender.com/api/problems/${currentProblemId}`);
+        const response = await fetch(`${import.meta.env.VITE_BACKEND_URL || 'https://eval-ai-3.onrender.com'}/api/problems/${currentProblemId}`);
         const data = await response.json();
         setActiveProblem(data);
       } catch (err) {
@@ -119,8 +142,11 @@ export default function InterviewRoom({ config }: { config: InterviewConfig }) {
         {/* Top bar with timer */}
         <div className="flex justify-between items-center bg-gray-800 px-4 py-3 rounded-xl border border-gray-700 shadow-sm">
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            <span className="font-semibold text-gray-200 font-mono tracking-wider">45:00</span>
+             {/* Dynamic dot color: pulses red if under 5 minutes */}
+            <div className={`w-2 h-2 rounded-full ${timeLeft <= 300 ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} />
+            <span className={`font-semibold font-mono tracking-wider ${timeLeft <= 300 ? 'text-red-400' : 'text-gray-200'}`}>
+              {formattedTime}
+            </span>
           </div>
           <button 
             onClick={endInterview}
